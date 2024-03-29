@@ -2,86 +2,85 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.io import loadmat
 import matplotlib.pyplot as plt
-import copy
+from sklearn.utils import shuffle
+from tqdm.auto import tqdm
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
 class RBM:
     def __init__(self, p, q):
+        self.p = p
+        self.q = q
         self.a = np.zeros(p)
         self.b = np.zeros(q)
-        self.W = np.random.normal(size=(p, q)) * np.sqrt(0.01)
+        self.W = np.random.normal(loc=0, scale=np.sqrt(0.01), size=(p, q))
 
-    def init_RBM(self):
-        # Initialisation des poids et biais
-        self.a = np.zeros(self.W.shape[0])
-        self.b = np.zeros(self.W.shape[1])
-        self.W = np.random.normal(size=self.W.shape) * np.sqrt(0.01)
-
-    def entree_sortie_RBM(self, V):
-        # Calcul des sorties
-        return sigmoid(V @ self.W + self.b)
+    def entree_sortie_RBM(self, X):
+        out = sigmoid(X @ self.W + self.b)
+        return out
 
     def sortie_entree_RBM(self, H):
-        # Calcul des entrées
-        return sigmoid(H @ self.W.T + self.a)
+        in_ = sigmoid(H @ self.W.T + self.a)
+        return in_
+    
+    def calcul_softmax(self, X):
+        out = X @ self.W + self.b
 
-    def train_RBM(self, X, learning_rate, len_batch, n_epochs, verbose=False):
-        weights = []
-        losses = []
+        proba = np.exp(out) / np.sum(np.exp(out), axis=1, keepdims=True)
 
-        for i in range(n_epochs):
-            np.random.shuffle(X)
-            n = X.shape[0]
-            for i_batch in range(0, n, len_batch):
-                X_batch = X[i_batch:min(i_batch + len_batch, n), :]
-                t_batch_i = X_batch.shape[0]
+        return proba
 
-                V0 = copy.deepcopy(X_batch)
-                pH_V0 = self.entree_sortie_RBM(V0)
-                H0 = (np.random.rand(t_batch_i, self.W.shape[1]) < pH_V0) * 1
-                pV_H0 = self.sortie_entree_RBM(H0)
-                V1 = (np.random.rand(t_batch_i, self.W.shape[0]) < pV_H0) * 1
-                pH_V1 = self.entree_sortie_RBM(V1)
+    def train_RBM(self, X, n_epochs, learning_rate, batch_size, plot = True):
+        error_history = []
+        with tqdm(range(n_epochs)) as pbar:
+            for _ in pbar:
+                X_copy = X.copy()
+                np.random.shuffle(X_copy)
 
-                da = np.sum(V0 - V1, axis=0)
-                db = np.sum(pH_V0 - pH_V1, axis=0)
-                dW = V0.T @ pH_V0 - V1.T @ pH_V1
+                for batch in range(0, X.shape[0], batch_size):
+                    X_batch = X_copy[batch : min(batch + batch_size, X.shape[0])]
+                    tb = X_batch.shape[0]
 
-                self.a += learning_rate * da
-                self.b += learning_rate * db
-                self.W += learning_rate * dW
+                    v0 = X_batch
+                    p_h_v0 = self.entree_sortie_RBM(v0)
 
-                weights.append(np.mean(self.W))
+                    # Sample according to a Bernoulli
+                    h0 = (np.random.random((tb, self.q)) < p_h_v0) * 1
+                    p_v1_h0 = self.sortie_entree_RBM(h0)
+                    v1 = (np.random.random((tb, self.p)) < p_v1_h0) * 1
+                    p_h_v1 = self.entree_sortie_RBM(v1)
 
-            H = self.entree_sortie_RBM(X)
-            X_rec = self.sortie_entree_RBM(H)
-            loss = np.mean((X - X_rec) ** 2)
-            losses.append(loss)
-            if i % 10 == 0 and verbose:
-                print("epoch " + str(i) + "/" + str(n_epochs) + " - loss : " + str(loss))
+                    # Calculate the gradient
+                    grad_a = np.sum(v0 - v1, axis=0)  # size p
+                    grad_b = np.sum(p_h_v0 - p_h_v1, axis=0)  # size q
+                    grad_W = v0.T @ p_h_v0 - v1.T @ p_h_v1
 
-        plt.plot(losses)
-        plt.xlabel('epochs')
-        plt.ylabel('loss')
-        plt.title('Evolution of the loss through ' + str(n_epochs) + ' epochs')
-        plt.show()
-        print("Final loss:", losses[-1])
+                    # Update the parameters
+                    self.a += (learning_rate / tb) * grad_a
+                    self.b += (learning_rate / tb) * grad_b
+                    self.W += (learning_rate / tb) * grad_W
 
-        plt.xlabel('epochs')
-        plt.ylabel('mean elements of weight W')
-        plt.plot(weights)
-        plt.show()
+                H = self.entree_sortie_RBM(X_copy)
+                X_reconstruction = self.sortie_entree_RBM(H)
 
-    def generer_image_RBM(self, nb_images, nb_iter, size_img):
+                error = np.mean((X_copy - X_reconstruction) ** 2)
+                error_history.append(error)
+                pbar.set_description(f"error {error:.4f} ")
+        if plot:
+            plt.plot(error_history)
+            plt.grid()
+            plt.show()
+
+        return error_history
+
+    def generer_image_RBM(self, nb_images, nb_iter):
         images = []
         for i in range(nb_images):
             v = (np.random.rand(self.W.shape[0]) < 0.5) * 1
             for j in range(nb_iter):
                 h = (np.random.rand(self.W.shape[1]) < self.entree_sortie_RBM(v)) * 1
                 v = (np.random.rand(self.W.shape[0]) < self.sortie_entree_RBM(h)) * 1
-            v = v.reshape(size_img)
             images.append(v)
         return images
 
